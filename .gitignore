@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Secrets & local env
+.env
+.DS_Store
+
+# Learning / internal (not for public repo)
+doc/
+democode/
+work/
+.cursor/
+PROMPT-for-cursor-plan.md
