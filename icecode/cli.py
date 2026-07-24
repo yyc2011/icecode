@@ -48,7 +48,7 @@ def main() -> None:
 
     while True:
         try:
-            user_input = console.input("[bold blue]你>[/bold blue] ").strip()
+            user_input = console.input("[bold blue]icecode>[/bold blue] ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]再见[/dim]")
             break

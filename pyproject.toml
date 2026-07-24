@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "icecode"
 version = "0.1.0"
-description = "IceCode — Claude Code style Python CLI Agent"
+description = "IceCode — Python CLI coding agent with tools and permissions"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
   "openai>=1.40.0",
   "anthropic>=0.34.0",

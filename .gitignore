@@ -12,7 +12,7 @@ build/
 .env
 .DS_Store
 
-# Learning / internal (not for public repo)
+# Local-only (not published)
 doc/
 democode/
 work/

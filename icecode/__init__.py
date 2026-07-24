@@ -1,3 +1,3 @@
-"""IceCode — Claude Code 风格 Python CLI Agent。"""
+"""IceCode — Python CLI coding agent."""
 
 __version__ = "0.1.0"

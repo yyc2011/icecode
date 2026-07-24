@@ -34,7 +34,12 @@ class BashTool(Tool):
     name = "bash"
     description = (
         "在项目的工作目录下执行一条 shell 命令，返回 stdout/stderr。"
-        "适用于运行测试、安装依赖、查看 git 状态等。不要用它做文件的批量编辑，请优先用 edit_file。"
+        "用于需要 shell 的操作：跑测试、git、安装依赖、系统命令等。"
+        "有专用工具时不要用 bash 替代："
+        "读文件用 read_file，改文件用 edit_file，新建用 write_file，"
+        "找文件用 glob_search，搜内容用 grep_search。"
+        "仅当专用工具失败或不可用时（例如 edit_file 因文件超过 1 GiB 被拒）才回退到 bash；"
+        "此时用流式方式改文件（sed -i / awk / python 按行处理），不要把整文件读进内存。"
     )
     input_schema = {
         "type": "object",

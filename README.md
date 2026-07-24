@@ -2,7 +2,7 @@
 
 Python CLI Agent：多轮对话 + 工具调用（读/写/搜文件、执行 shell），支持 DeepSeek / Anthropic，带权限确认。
 
-设计上对齐常见 coding agent 的循环（LLM → tool_use → tool_result → 再决策），协议采用 Anthropic 风格 content-block，便于换模型。
+采用 Anthropic 风格 content-block 协议（text / tool_use / tool_result），Agent 循环为：模型决策 → 执行工具 → 回灌结果 → 再决策，便于切换多家模型 Provider。
 
 <p align="center">
   <img src="assets/first.png" alt="IceCode 运行演示：写文件并执行 helloworld" width="720" />
@@ -18,13 +18,25 @@ Python CLI Agent：多轮对话 + 工具调用（读/写/搜文件、执行 shel
 
 ## 快速开始
 
+需要 **Python 3.12+**。
+
 ```bash
+# 进入仓库根目录后：
+
+# 1. 建议用虚拟环境（可选但推荐）
+python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 2. 安装包（这一步才会注册 `icecode` 命令）
+pip install -e .
+
+# 3. 配置 API Key
 cp .env.example .env
 # 编辑 .env，填入 DEEPSEEK_API_KEY
 
-pip install -e .
+# 4. 启动
 icecode
-# 或
+# 或（不依赖 PATH 脚本时）
 python -m icecode
 ```
 

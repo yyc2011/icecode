@@ -17,7 +17,7 @@ class Tool(ABC):
     description: str
     input_schema: dict[str, Any]
     requires_confirmation: bool = False
-    # 对齐 Tool.ts buildTool 默认：非只读、非并发安全
+    # 默认：非只读、非并发安全（fail-closed）
     is_read_only: bool = False
     is_concurrency_safe: bool = False
 

@@ -1,7 +1,7 @@
 """
 权限：副作用工具执行前确认；deny 优先 fail-closed。
 
-PermissionMode（对齐源码精简版）：
+PermissionMode：
   - default: 需确认的工具询问 y/n/a
   - accept_edits: 写文件类自动允许，bash 仍询问
   - dont_ask: 需要确认时直接 deny（ask→deny）
