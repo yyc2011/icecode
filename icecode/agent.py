@@ -68,15 +68,14 @@ class Agent:
 
     def _build_system_prompt(self) -> str:
         project_context = ""
-        for name in ("CLAUDE.md", "AGENTS.md"):
-            p = Path(self.cfg.workdir) / name
-            try:
-                project_context = (
-                    f"\n项目说明（来自项目根目录的说明文件）：\n{p.read_text(encoding='utf-8')}\n"
-                )
-                break
-            except FileNotFoundError:
-                continue
+        icecode_md = Path(self.cfg.workdir) / "icecode.md"
+        try:
+            project_context = (
+                f"\n项目说明（来自工作区根目录 icecode.md）：\n"
+                f"{icecode_md.read_text(encoding='utf-8')}\n"
+            )
+        except FileNotFoundError:
+            pass
 
         template = (
             SYSTEM_PROMPT_TEMPLATE if self.cfg.enable_tools else SYSTEM_PROMPT_CHAT_ONLY
