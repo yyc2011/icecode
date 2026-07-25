@@ -41,7 +41,14 @@ class PermissionManager:
         """会话级工具 deny，优先于 allow。"""
         self._denied_tools.add(tool_name)
 
-    def check(self, tool_name: str, summary: str, *, is_edit_tool: bool = False) -> None:
+    def check(
+        self,
+        tool_name: str,
+        summary: str,
+        *,
+        is_edit_tool: bool = False,
+        diff: str | None = None,
+    ) -> None:
         if tool_name in self._denied_tools:
             raise PermissionDenied(f"工具已被拒绝: {tool_name}")
 
@@ -55,6 +62,11 @@ class PermissionManager:
             raise PermissionDenied(f"dont_ask 模式拒绝需确认的操作: {summary}")
 
         self.console.print(f"\n[yellow]⚠ 即将执行:[/yellow] {summary}")
+        if diff:
+            from icecode.tools.diff_utils import render_diff
+
+            render_diff(self.console, diff)
+
         choice = (
             Prompt.ask(
                 "允许吗？",

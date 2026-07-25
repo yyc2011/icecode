@@ -45,3 +45,7 @@ class Tool(ABC):
 
     def confirmation_summary(self, tool_input: dict[str, Any]) -> str:
         return f"{self.name}({tool_input})"
+
+    def confirmation_diff(self, tool_input: dict[str, Any]) -> str | None:
+        """确认前可选的 unified diff 预览；默认无。子类可覆写。"""
+        return None

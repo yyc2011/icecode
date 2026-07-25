@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from icecode.tools.base import Tool, ToolError
+from icecode.tools.diff_utils import unified_diff_text
 from icecode.tools.file_limits import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     MAX_EDIT_FILE_SIZE,
@@ -14,7 +16,6 @@ from icecode.tools.file_limits import (
     rough_token_count,
 )
 from icecode.tools.read_file_in_range import FileTooLargeError, read_file_in_range
-
 
 def _resolve(path: str, workdir: str) -> Path:
     p = Path(path)
@@ -151,6 +152,14 @@ class WriteFileTool(Tool):
         return f"{'覆盖' if existed else '创建'}文件成功: {path}"
 
 
+@dataclass
+class _EditPlan:
+    path: Path
+    old_content: str
+    new_content: str
+    match_count: int
+
+
 class EditFileTool(Tool):
     name = "edit_file"
     description = (
@@ -182,10 +191,10 @@ class EditFileTool(Tool):
         self.workdir = workdir
 
     def confirmation_summary(self, tool_input: dict) -> str:
-        # 阶段 3：此处可改为展示 unified diff 后再确认
         return f"编辑文件 {tool_input.get('path', '?')}"
 
-    def execute(self, tool_input: dict) -> str:
+    def _plan(self, tool_input: dict) -> _EditPlan:
+        """校验并计算替换后内容；不写盘。失败抛 ToolError。"""
         path = _resolve(tool_input["path"], self.workdir)
         if not path.exists():
             raise ToolError(f"文件不存在: {path}")
@@ -227,8 +236,18 @@ class EditFileTool(Tool):
         else:
             new_content = content.replace(old_str, new_str, 1)
             n = 1
-        path.write_text(new_content, encoding="utf-8")
-        return (
-            f"编辑成功: {path}（替换 {n} 处）\n"
-            f"--- 替换前 ---\n{old_str}\n--- 替换后 ---\n{new_str}"
+        return _EditPlan(
+            path=path,
+            old_content=content,
+            new_content=new_content,
+            match_count=n,
         )
+
+    def confirmation_diff(self, tool_input: dict) -> str | None:
+        plan = self._plan(tool_input)
+        return unified_diff_text(str(plan.path), plan.old_content, plan.new_content)
+
+    def execute(self, tool_input: dict) -> str:
+        plan = self._plan(tool_input)
+        plan.path.write_text(plan.new_content, encoding="utf-8")
+        return f"编辑成功: {plan.path}（替换 {plan.match_count} 处）"

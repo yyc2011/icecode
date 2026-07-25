@@ -13,6 +13,19 @@ from icecode.config import load_config
 from icecode.llm.factory import create_provider
 from icecode.tools.registry import build_default_registry, build_empty_registry
 
+# macOS 上脚本内 input() 默认不加载 readline，中文退格会按字节删、删不干净。
+# 交互式解释器会自动 import readline；这里显式启用并打开 UTF-8/meta。
+try:
+    import readline
+
+    readline.parse_and_bind("set bind-tty-special-chars off")
+    readline.parse_and_bind("set input-meta on")
+    readline.parse_and_bind("set output-meta on")
+    readline.parse_and_bind("set convert-meta off")
+    readline.parse_and_bind("set enable-meta-keybindings on")
+except ImportError:
+    pass
+
 console = Console()
 
 
@@ -48,7 +61,8 @@ def main() -> None:
 
     while True:
         try:
-            user_input = console.input("[bold blue]icecode>[/bold blue] ").strip()
+            # 无颜色 prompt，避免 ANSI 宽度被 readline 算错
+            user_input = input("icecode> ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[dim]再见[/dim]")
             break

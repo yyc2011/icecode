@@ -35,11 +35,14 @@ class ToolRegistry:
         tool.validate_input(tool_input)
 
         # 2. 权限（fail-closed：需确认则走 PermissionManager）
+        # confirmation_diff 先跑校验（失败抛 ToolError，不进确认 UI、不写盘）
         if tool.requires_confirmation:
+            diff = tool.confirmation_diff(tool_input)
             permission_manager.check(
                 name,
                 tool.confirmation_summary(tool_input),
                 is_edit_tool=name in ("write_file", "edit_file"),
+                diff=diff,
             )
 
         # 3. 执行 + 4. 格式化

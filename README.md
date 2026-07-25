@@ -5,7 +5,8 @@ Python CLI Agent：多轮对话 + 工具调用（读/写/搜文件、执行 shel
 采用 Anthropic 风格 content-block 协议（text / tool_use / tool_result），Agent 循环为：模型决策 → 执行工具 → 回灌结果 → 再决策，便于切换多家模型 Provider。
 
 <p align="center">
-  <img src="assets/first.png" alt="IceCode 运行演示：写文件并执行 helloworld" width="720" />
+  <img src="assets/01.png" alt="IceCode 运行演示 1" width="48%" />
+  <img src="assets/02.png" alt="IceCode 运行演示 2" width="48%" />
 </p>
 
 ## 能力
