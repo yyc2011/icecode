@@ -1,0 +1,6 @@
+# Personal analysis notes (human-only); keep doc/source-code searchable
+doc/分析*.md
+doc/*.canvas.tsx
+
+# Early Python seed; default do not search (open only if user asks or source-code has no equivalent)
+democode/

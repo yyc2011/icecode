@@ -6,13 +6,12 @@ Agent Loop：LLM 决策 → 工具执行 → 多轮直到完成。
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from rich.console import Console
 
 from icecode.config import Config
 from icecode.llm.base import LLMProvider, Message, ToolResultBlock
 from icecode.permissions import PermissionDenied, PermissionManager
+from icecode.project_context import build_project_context_block
 from icecode.tools.base import ToolError
 from icecode.tools.registry import ToolRegistry
 
@@ -67,15 +66,7 @@ class Agent:
         self.system_prompt = self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
-        project_context = ""
-        icecode_md = Path(self.cfg.workdir) / "icecode.md"
-        try:
-            project_context = (
-                f"\n项目说明（来自工作区根目录 icecode.md）：\n"
-                f"{icecode_md.read_text(encoding='utf-8')}\n"
-            )
-        except FileNotFoundError:
-            pass
+        project_context = build_project_context_block(self.cfg.workdir)
 
         template = (
             SYSTEM_PROMPT_TEMPLATE if self.cfg.enable_tools else SYSTEM_PROMPT_CHAT_ONLY

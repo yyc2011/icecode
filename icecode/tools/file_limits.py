@@ -14,6 +14,10 @@ FAST_PATH_MAX_SIZE = 10 * 1024 * 1024  # 10 MiB
 # 防 OOM：整文件读入内存做 str replace 前的硬门禁
 MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024  # 1 GiB (stat bytes)
 
+# 搜索结果上限（与上游 GlobTool maxResults / GrepTool DEFAULT_HEAD_LIMIT 对齐）
+DEFAULT_GLOB_RESULT_LIMIT = 100
+DEFAULT_GREP_RESULT_LIMIT = 250
+
 
 def format_file_size(n: int) -> str:
     """格式化字节数为 B / KB / MB / GB。"""
