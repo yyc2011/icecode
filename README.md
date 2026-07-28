@@ -4,7 +4,10 @@ Python CLI Agent： 多轮规划Loop + 多轮对话 + 工具调用（读/写/搜
 
 采用 Anthropic 风格 content-block 协议（text / tool_use / tool_result），Agent 循环为：模型决策 → 执行工具 → 回灌结果 → 再决策，便于切换多家模型 Provider。
 
-
+<p align="center">
+  <img src="assets/01.png" alt="IceCode CLI：多轮工具调用搭建 FastAPI" width="48%" />
+  <img src="assets/02.png" alt="浏览器访问本地 FastAPI 结果" width="48%" />
+</p>
 
 ## 能力
 
