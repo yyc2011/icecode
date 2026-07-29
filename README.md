@@ -16,6 +16,9 @@ Python CLI Agent： 多轮规划Loop + 多轮对话 + 工具调用（读/写/搜
 - **权限**：副作用操作需确认；`PERMISSION_MODE` 支持 `default` / `accept_edits` / `dont_ask`
 - **安全**：工具 fail-closed；文件操作限制在 `WORKDIR` 内；bash 危险命令黑名单
 - **多 Provider**：DeepSeek（默认）与 Anthropic，可在 factory 中扩展
+- **流式输出**：模型文本增量渲染（`ICECODE_STREAM=false` 可关闭）
+- **会话**：本地 JSONL 持久化；`icecode -c` 继续最近会话，`icecode -r` 选择历史会话
+- **Usage**：展示每次与会话累计的 input/output tokens
 
 
 
@@ -39,6 +42,9 @@ cp .env.example .env
 
 # 4. 启动
 icecode
+# 继续最近会话 / 选择历史会话
+icecode -c
+icecode -r
 # 或（不依赖 PATH 脚本时）
 python -m icecode
 ```
@@ -55,9 +61,10 @@ ICECODE_ENABLE_TOOLS=false icecode
 
 ```
 icecode/
-  cli.py           # REPL 入口
+  cli.py           # REPL 入口（含 -c / -r）
   agent.py         # Agent Loop
   config.py        # 环境配置
+  session.py       # 会话 transcript
   permissions.py   # 权限确认与模式
   llm/             # Provider 抽象 + DeepSeek / Anthropic
   tools/           # 工具基类、注册表与具体工具
@@ -73,6 +80,8 @@ icecode/
 | `DEEPSEEK_API_KEY`     | DeepSeek API Key（默认 Provider）           |
 | `WORKDIR`              | 工具沙箱根目录，默认当前目录                          |
 | `ICECODE_ENABLE_TOOLS` | `false` 时仅对话                            |
+| `ICECODE_STREAM`       | `false` 关闭真流式，回退非流式                     |
+| `ICECODE_HOME`         | 会话等本地数据目录，默认 `~/.icecode`               |
 | `PERMISSION_MODE`      | `default` / `accept_edits` / `dont_ask` |
 | `AUTO_APPROVE`         | `true` 跳过全部确认（慎用）                       |
 

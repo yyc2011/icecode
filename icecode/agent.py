@@ -6,12 +6,27 @@ Agent Loop：LLM 决策 → 工具执行 → 多轮直到完成。
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 from icecode.config import Config
-from icecode.llm.base import LLMProvider, Message, ToolResultBlock
+from icecode.llm.base import (
+    LLMProvider,
+    LLMResponse,
+    Message,
+    StreamDone,
+    TextDelta,
+    ToolResultBlock,
+    Usage,
+    accumulate_usage,
+)
 from icecode.permissions import PermissionDenied, PermissionManager
 from icecode.project_context import build_project_context_block
+from icecode.session import append_message
 from icecode.tools.base import ToolError
 from icecode.tools.registry import ToolRegistry
 
@@ -52,17 +67,20 @@ class Agent:
         registry: ToolRegistry,
         cfg: Config,
         console: Console,
+        session_path: Path | None = None,
     ):
         self.provider = provider
         self.registry = registry
         self.cfg = cfg
         self.console = console
+        self.session_path = session_path
         self.permission_manager = PermissionManager(
             console,
             auto_approve=cfg.auto_approve,
             mode=cfg.permission_mode,
         )
         self.messages: list[Message] = []
+        self.total_usage = Usage()
         self.system_prompt = self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
@@ -73,11 +91,22 @@ class Agent:
         )
         return template.format(workdir=self.cfg.workdir, project_context=project_context)
 
-    def run_turn(self, user_input: str) -> str:
-        self.messages.append(Message.user_text(user_input))
-        tools = self.registry.schemas() if self.cfg.enable_tools else []
+    def _record_message(self, message: Message) -> None:
+        self.messages.append(message)
+        if self.session_path is not None:
+            append_message(self.session_path, message)
 
-        for _turn in range(self.cfg.max_turns):
+    def _print_usage(self, response: LLMResponse) -> None:
+        self.total_usage = accumulate_usage(self.total_usage, response.usage)
+        self.console.print(
+            f"[dim]usage: 本次 input={response.usage.input_tokens} "
+            f"output={response.usage.output_tokens} · "
+            f"会话累计 input={self.total_usage.input_tokens} "
+            f"output={self.total_usage.output_tokens}[/dim]"
+        )
+
+    def _call_model(self, tools: list) -> LLMResponse:
+        if not self.cfg.enable_streaming:
             response = self.provider.create_message(
                 messages=self.messages,
                 system=self.system_prompt,
@@ -85,13 +114,71 @@ class Agent:
                 max_tokens=self.cfg.max_tokens,
                 temperature=self.cfg.temperature,
             )
+            return response
 
-            self.messages.append(Message.assistant(response.content))
+        accumulated = ""
+        live: Live | None = None
+        response: LLMResponse | None = None
+
+        try:
+            for event in self.provider.stream_message(
+                messages=self.messages,
+                system=self.system_prompt,
+                tools=tools,
+                max_tokens=self.cfg.max_tokens,
+                temperature=self.cfg.temperature,
+            ):
+                if isinstance(event, TextDelta):
+                    accumulated += event.text
+                    if live is None:
+                        live = Live(
+                            Panel(
+                                Markdown(accumulated),
+                                title="assistant",
+                                border_style="green",
+                            ),
+                            console=self.console,
+                            refresh_per_second=12,
+                        )
+                        live.start()
+                    else:
+                        live.update(
+                            Panel(
+                                Markdown(accumulated),
+                                title="assistant",
+                                border_style="green",
+                            )
+                        )
+                elif isinstance(event, StreamDone):
+                    response = event.response
+        finally:
+            if live is not None:
+                live.stop()
+
+        if response is None:
+            raise RuntimeError("模型流式响应未返回 StreamDone")
+        return response
+
+    def run_turn(self, user_input: str) -> str:
+        self._record_message(Message.user_text(user_input))
+        tools = self.registry.schemas() if self.cfg.enable_tools else []
+
+        for _turn in range(self.cfg.max_turns):
+            response = self._call_model(tools)
+            self._print_usage(response)
+            self._record_message(Message.assistant(response.content))
 
             if response.stop_reason != "tool_use" or not self.cfg.enable_tools:
-                return response.text() or "（模型未返回文本）"
+                text = response.text() or "（模型未返回文本）"
+                # 非流式：Agent 负责最终 Panel；流式：Live 已渲染
+                if not self.cfg.enable_streaming:
+                    self.console.print(
+                        Panel(Markdown(text), title="assistant", border_style="green")
+                    )
+                return text
 
-            if response.text():
+            # 中间轮（还有 tool_use）：非流式补打文本说明
+            if response.text() and not self.cfg.enable_streaming:
                 self.console.print(response.text())
 
             tool_results = []
@@ -105,7 +192,7 @@ class Agent:
                     )
                 )
 
-            self.messages.append(Message.tool_results(tool_results))
+            self._record_message(Message.tool_results(tool_results))
 
         return "⚠ 已达到单次任务最大轮数限制，任务可能未完全完成。"
 
