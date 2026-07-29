@@ -74,6 +74,14 @@ class Usage:
     output_tokens: int = 0
 
 
+def accumulate_usage(total: Usage, new: Usage) -> Usage:
+    """累加两次 API 调用的 usage（会话级合计）。"""
+    return Usage(
+        input_tokens=total.input_tokens + new.input_tokens,
+        output_tokens=total.output_tokens + new.output_tokens,
+    )
+
+
 @dataclass
 class LLMResponse:
     content: list[ContentBlock]
@@ -85,6 +93,23 @@ class LLMResponse:
 
     def text(self) -> str:
         return "\n".join(b.text for b in self.content if isinstance(b, TextBlock))
+
+
+@dataclass
+class TextDelta:
+    """流式增量文本（仅 text；工具入参在 StreamDone 中一次性给出）。"""
+
+    text: str
+
+
+@dataclass
+class StreamDone:
+    """流结束：完整 LLMResponse（含 usage / tool_use / stop_reason）。"""
+
+    response: LLMResponse
+
+
+StreamEvent = Union[TextDelta, StreamDone]
 
 
 class LLMProvider(ABC):
@@ -108,6 +133,9 @@ class LLMProvider(ABC):
         tools: list[ToolSchema],
         max_tokens: int = 4096,
         temperature: float = 0.3,
-    ) -> Iterator[LLMResponse]:
-        """阶段 5 预留：默认回退为单次 create_message。"""
-        yield self.create_message(messages, system, tools, max_tokens, temperature)
+    ) -> Iterator[StreamEvent]:
+        """默认回退：单次 create_message，再产出 TextDelta（若有）+ StreamDone。"""
+        resp = self.create_message(messages, system, tools, max_tokens, temperature)
+        if resp.text():
+            yield TextDelta(resp.text())
+        yield StreamDone(resp)

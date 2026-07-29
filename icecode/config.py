@@ -37,6 +37,8 @@ class Config:
     auto_approve: bool = os.getenv("AUTO_APPROVE", "false").lower() == "true"
     # 阶段 0：设 ICECODE_ENABLE_TOOLS=false 可关工具跑纯对话
     enable_tools: bool = os.getenv("ICECODE_ENABLE_TOOLS", "true").lower() != "false"
+    # 阶段 5：设 ICECODE_STREAM=false 关闭真流式，回退到 create_message
+    enable_streaming: bool = os.getenv("ICECODE_STREAM", "true").lower() != "false"
     # 阶段 2：default | accept_edits | dont_ask
     permission_mode: PermissionModeName = "default"  # type: ignore[assignment]
 
