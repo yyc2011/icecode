@@ -19,6 +19,7 @@ from icecode.llm.base import (
     ToolUseBlock,
     Usage,
 )
+from icecode.llm.pairing import ensure_tool_result_pairing
 
 
 class AnthropicProvider(LLMProvider):
@@ -32,7 +33,7 @@ class AnthropicProvider(LLMProvider):
 
     def _to_wire_messages(self, messages: list[Message]) -> list[dict]:
         wire = []
-        for m in messages:
+        for m in ensure_tool_result_pairing(messages):
             content = []
             for b in m.content:
                 if isinstance(b, TextBlock):

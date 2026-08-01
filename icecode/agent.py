@@ -19,8 +19,10 @@ from icecode.llm.base import (
     LLMResponse,
     Message,
     StreamDone,
+    TextBlock,
     TextDelta,
     ToolResultBlock,
+    ToolUseBlock,
     Usage,
     accumulate_usage,
 )
@@ -166,9 +168,21 @@ class Agent:
         for _turn in range(self.cfg.max_turns):
             response = self._call_model(tools)
             self._print_usage(response)
-            self._record_message(Message.assistant(response.content))
 
-            if response.stop_reason != "tool_use" or not self.cfg.enable_tools:
+            # stop_reason=tool_use 并不可靠；以 content 是否含 tool_use 为准
+            tool_uses = response.tool_uses()
+            content = list(response.content)
+            if tool_uses and not self.cfg.enable_tools:
+                content = [b for b in content if not isinstance(b, ToolUseBlock)]
+                if not content:
+                    content = [
+                        TextBlock(text="（模型尝试调用工具，但当前未启用工具）")
+                    ]
+                tool_uses = []
+
+            self._record_message(Message.assistant(content))
+
+            if not tool_uses:
                 text = response.text() or "（模型未返回文本）"
                 # 非流式：Agent 负责最终 Panel；流式：Live 已渲染
                 if not self.cfg.enable_streaming:
@@ -182,15 +196,33 @@ class Agent:
                 self.console.print(response.text())
 
             tool_results = []
-            for tool_use in response.tool_uses():
-                result_text, is_error = self._execute_tool(tool_use.name, tool_use.input)
-                tool_results.append(
-                    ToolResultBlock(
-                        tool_use_id=tool_use.id,
-                        content=result_text,
-                        is_error=is_error,
+            try:
+                for tool_use in tool_uses:
+                    result_text, is_error = self._execute_tool(
+                        tool_use.name, tool_use.input
                     )
-                )
+                    tool_results.append(
+                        ToolResultBlock(
+                            tool_use_id=tool_use.id,
+                            content=result_text,
+                            is_error=is_error,
+                        )
+                    )
+            except BaseException:
+                # 中断/未捕获异常时仍补齐配对，避免下次请求 400
+                done_ids = {r.tool_use_id for r in tool_results}
+                for tool_use in tool_uses:
+                    if tool_use.id not in done_ids:
+                        tool_results.append(
+                            ToolResultBlock(
+                                tool_use_id=tool_use.id,
+                                content="[Tool result missing due to internal error]",
+                                is_error=True,
+                            )
+                        )
+                if tool_results:
+                    self._record_message(Message.tool_results(tool_results))
+                raise
 
             self._record_message(Message.tool_results(tool_results))
 

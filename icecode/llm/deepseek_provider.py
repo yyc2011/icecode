@@ -19,6 +19,7 @@ from icecode.llm.base import (
     ToolUseBlock,
     Usage,
 )
+from icecode.llm.pairing import ensure_tool_result_pairing
 
 
 class DeepSeekProvider(LLMProvider):
@@ -37,6 +38,7 @@ class DeepSeekProvider(LLMProvider):
 
     def _to_wire_messages(self, messages: list[Message], system: str) -> list[dict]:
         wire: list[dict] = [{"role": "system", "content": system}]
+        messages = ensure_tool_result_pairing(messages)
 
         for m in messages:
             text_parts = [b.text for b in m.content if isinstance(b, TextBlock)]
@@ -58,7 +60,8 @@ class DeepSeekProvider(LLMProvider):
                         for tu in tool_uses
                     ]
                 wire.append(msg)
-            elif tool_results:
+            elif m.role == "user":
+                # OpenAI：tool 消息须紧跟 tool_calls；文本另成 user 消息
                 for tr in tool_results:
                     wire.append(
                         {
@@ -67,8 +70,8 @@ class DeepSeekProvider(LLMProvider):
                             "content": tr.content,
                         }
                     )
-            else:
-                wire.append({"role": "user", "content": "\n".join(text_parts)})
+                if text_parts or not tool_results:
+                    wire.append({"role": "user", "content": "\n".join(text_parts)})
 
         return wire
 
@@ -102,7 +105,8 @@ class DeepSeekProvider(LLMProvider):
                 blocks.append(ToolUseBlock(id=tc.id, name=tc.function.name, input=args))
 
         finish_reason = choice.finish_reason
-        if finish_reason == "tool_calls":
+        # finish_reason 不可靠：只要有 tool_calls 就按 tool_use 处理
+        if msg.tool_calls or finish_reason == "tool_calls":
             stop_reason = "tool_use"
         elif finish_reason == "length":
             stop_reason = "max_tokens"
@@ -222,7 +226,7 @@ class DeepSeekProvider(LLMProvider):
                 )
             )
 
-        if finish_reason == "tool_calls":
+        if tool_acc or finish_reason == "tool_calls":
             stop_reason = "tool_use"
         elif finish_reason == "length":
             stop_reason = "max_tokens"

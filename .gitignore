@@ -12,9 +12,10 @@ build/
 .env
 .DS_Store
 
-# Local-only (not published)
+# Local-only notes / drafts / IDE config (not published)
 doc/
 democode/
 work/
 .cursor/
+.cursorignore
 PROMPT-for-cursor-plan.md

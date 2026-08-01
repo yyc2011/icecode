@@ -28,5 +28,5 @@ def create_provider(cfg: Config) -> LLMProvider:
             model=cfg.anthropic_model,
         )
 
-    # 阶段 5+：可在此注册 glm 等 OpenAI 兼容 Provider
+    # 可在此扩展注册其他 OpenAI 兼容 Provider（如 glm）
     raise ValueError(f"未知的 provider: {provider_name!r}，目前支持 deepseek / anthropic")

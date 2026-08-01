@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 ICECODE_MD_FILENAME = "icecode.md"
-# 数值对齐上游 MAX_MEMORY_CHARACTER_COUNT；语义改为硬截断（无 compact 兜底）
+# icecode.md 注入 system prompt 的字符上限；超出则硬截断
 MAX_ICECODE_MD_CHARS = 40_000
 
 _MEMORY_INSTRUCTION = (
