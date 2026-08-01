@@ -1,7 +1,7 @@
 """
 工具注册表。执行管线：查找 → validate → 权限 → execute → format_result。
 
-阶段 6 扩展点：在 build_default_registry 中 register todo / agent / mcp 工具。
+后续可在 build_default_registry 中 register 任务清单 / 子代理 / MCP 等工具。
 """
 
 from __future__ import annotations
@@ -62,13 +62,10 @@ def build_default_registry(workdir: str) -> ToolRegistry:
     registry.register(BashTool(workdir))
     registry.register(GlobTool(workdir))
     registry.register(GrepTool(workdir))
-    # 阶段 6 预留：
-    # registry.register(TodoWriteTool())
-    # registry.register(AgentTool(...))
-    # MCP 工具由 mcp client 动态 register
+    # 预留扩展：任务清单、子代理、MCP 动态注册等
     return registry
 
 
 def build_empty_registry() -> ToolRegistry:
-    """阶段 0：纯对话，无工具。"""
+    """无工具注册表（纯对话模式）。"""
     return ToolRegistry()
