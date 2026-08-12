@@ -114,6 +114,8 @@ StreamEvent = Union[TextDelta, StreamDone]
 
 class LLMProvider(ABC):
     name: str = "base"
+    # 当前模型名（子类在 __init__ 中赋值，供窗口/阈值查询）
+    model: str = ""
 
     @abstractmethod
     def create_message(

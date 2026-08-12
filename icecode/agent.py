@@ -13,6 +13,13 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from icecode.compact.microcompact import microcompact_messages
+from icecode.compact.tokens import estimate_context_tokens
+from icecode.compact.windows import (
+    get_effective_context_window,
+    get_microcompact_threshold,
+    is_above_threshold,
+)
 from icecode.config import Config
 from icecode.llm.base import (
     LLMProvider,
@@ -83,6 +90,9 @@ class Agent:
         )
         self.messages: list[Message] = []
         self.total_usage = Usage()
+        # 最近一次 API 调用的 usage 与「该助手消息之后」的消息下标（窗口占用估算用）
+        self.last_call_usage = Usage()
+        self.last_call_message_index = 0
         self.system_prompt = self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
@@ -105,6 +115,52 @@ class Agent:
             f"output={response.usage.output_tokens} · "
             f"会话累计 input={self.total_usage.input_tokens} "
             f"output={self.total_usage.output_tokens}[/dim]"
+        )
+
+    def _maybe_microcompact(self) -> None:
+        """若当前窗口占用超过阈值，清理旧 compactable tool_result。
+
+        非法配置 fail-closed：本轮跳过，不清理。一轮最多执行一次。
+        只改内存中的 self.messages，不回写已落盘 JSONL。
+        """
+        if not self.cfg.enable_microcompact:
+            return
+        if self.cfg.microcompact_keep_recent < 1:
+            self.console.print(
+                "[dim]microcompact: keep_recent < 1，本轮跳过[/dim]"
+            )
+            return
+
+        try:
+            effective = get_effective_context_window(
+                self.provider.model,
+                self.cfg.max_tokens,
+                override=self.cfg.context_window_override,
+            )
+            threshold = get_microcompact_threshold(
+                effective, self.cfg.microcompact_buffer_tokens
+            )
+        except ValueError as e:
+            self.console.print(f"[dim]microcompact: 配置非法（{e}），本轮跳过[/dim]")
+            return
+
+        current_tokens = estimate_context_tokens(
+            self.messages, self.last_call_usage, self.last_call_message_index
+        )
+        if not is_above_threshold(current_tokens, threshold):
+            return
+
+        result = microcompact_messages(
+            self.messages, self.cfg.microcompact_keep_recent
+        )
+        if result.cleared_count == 0:
+            return
+
+        self.messages = result.messages
+        self.console.print(
+            f"[dim]microcompact: 清理 {result.cleared_count} 条旧 tool_result，"
+            f"约省 {result.tokens_saved} tokens "
+            f"（占用≈{current_tokens} / 阈值 {threshold}）[/dim]"
         )
 
     def _call_model(self, tools: list) -> LLMResponse:
@@ -166,6 +222,7 @@ class Agent:
         tools = self.registry.schemas() if self.cfg.enable_tools else []
 
         for _turn in range(self.cfg.max_turns):
+            self._maybe_microcompact()
             response = self._call_model(tools)
             self._print_usage(response)
 
@@ -181,6 +238,9 @@ class Agent:
                 tool_uses = []
 
             self._record_message(Message.assistant(content))
+            # usage 覆盖到本条助手消息为止；之后的消息计入增量估算
+            self.last_call_usage = response.usage
+            self.last_call_message_index = len(self.messages)
 
             if not tool_uses:
                 text = response.text() or "（模型未返回文本）"

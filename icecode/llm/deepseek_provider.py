@@ -35,6 +35,7 @@ class DeepSeekProvider(LLMProvider):
 
         self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
+        self.model = model
 
     def _to_wire_messages(self, messages: list[Message], system: str) -> list[dict]:
         wire: list[dict] = [{"role": "system", "content": system}]

@@ -42,12 +42,35 @@ class Config:
     # default | accept_edits | dont_ask
     permission_mode: PermissionModeName = "default"  # type: ignore[assignment]
 
+    # microcompact：清旧 tool_result（不调大模型）
+    enable_microcompact: bool = (
+        os.getenv("ICECODE_ENABLE_MICROCOMPACT", "true").lower() != "false"
+    )
+    microcompact_keep_recent: int = int(
+        os.getenv("ICECODE_MICROCOMPACT_KEEP_RECENT", "3")
+    )
+    microcompact_buffer_tokens: int = int(
+        os.getenv("ICECODE_MICROCOMPACT_BUFFER_TOKENS", "8000")
+    )
+    # 非空正整数时覆盖模型查表窗口；None 表示不覆盖
+    context_window_override: int | None = None
+
     def __post_init__(self) -> None:
         mode = os.getenv("PERMISSION_MODE", "default").lower()
         if mode not in ("default", "accept_edits", "dont_ask"):
             mode = "default"
         object.__setattr__(self, "permission_mode", mode)
         object.__setattr__(self, "workdir", str(Path(self.workdir).resolve()))
+
+        raw_override = os.getenv("ICECODE_CONTEXT_WINDOW_OVERRIDE", "").strip()
+        if raw_override:
+            try:
+                parsed = int(raw_override)
+            except ValueError:
+                parsed = None
+            object.__setattr__(
+                self, "context_window_override", parsed if parsed and parsed > 0 else None
+            )
 
 
 def load_config() -> Config:
