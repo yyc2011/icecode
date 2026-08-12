@@ -30,6 +30,7 @@ class AnthropicProvider(LLMProvider):
 
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
+        self.model = model
 
     def _to_wire_messages(self, messages: list[Message]) -> list[dict]:
         wire = []
