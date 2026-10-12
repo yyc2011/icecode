@@ -7,13 +7,21 @@ Agent Loop：LLM 决策 → 工具执行 → 多轮直到完成。
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from icecode.compact.autocompact import (
+    MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES,
+    get_autocompact_threshold,
+    should_autocompact,
+)
+from icecode.compact.full_compact import CompactError, run_full_compact
 from icecode.compact.microcompact import microcompact_messages
+from icecode.compact.prompt import build_compact_user_message
 from icecode.compact.tokens import estimate_context_tokens
 from icecode.compact.windows import (
     get_effective_context_window,
@@ -35,7 +43,7 @@ from icecode.llm.base import (
 )
 from icecode.permissions import PermissionDenied, PermissionManager
 from icecode.project_context import build_project_context_block
-from icecode.session import append_message
+from icecode.session import append_compact_boundary, append_message, append_usage_snapshot
 from icecode.tools.base import ToolError
 from icecode.tools.registry import ToolRegistry
 
@@ -93,6 +101,7 @@ class Agent:
         # 最近一次 API 调用的 usage 与「该助手消息之后」的消息下标（窗口占用估算用）
         self.last_call_usage = Usage()
         self.last_call_message_index = 0
+        self._autocompact_consecutive_failures = 0
         self.system_prompt = self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
@@ -116,6 +125,74 @@ class Agent:
             f"会话累计 input={self.total_usage.input_tokens} "
             f"output={self.total_usage.output_tokens}[/dim]"
         )
+
+    def _persist_usage_snapshot(self) -> None:
+        if self.session_path is not None:
+            append_usage_snapshot(
+                self.session_path, self.last_call_usage, self.last_call_message_index
+            )
+
+    def _apply_full_compact(self, trigger: Literal["auto", "manual"]) -> None:
+        """摘要重建 messages，并作废压缩前的占用快照。"""
+        pre_tokens = estimate_context_tokens(
+            self.messages, self.last_call_usage, self.last_call_message_index
+        )
+        result = run_full_compact(
+            self.messages,
+            self.provider,
+            reserved_output_tokens=self.cfg.compact_reserved_output_tokens,
+        )
+        self.total_usage = accumulate_usage(self.total_usage, result.usage)
+        transcript = str(self.session_path) if self.session_path is not None else None
+        summary_message = Message.user_text(
+            build_compact_user_message(result.summary_text, transcript)
+        )
+        self.messages = [summary_message]
+        self.last_call_usage = Usage()
+        self.last_call_message_index = 0
+        if self.session_path is not None:
+            append_compact_boundary(self.session_path, trigger, pre_tokens)
+            append_message(self.session_path, summary_message)
+
+    def _maybe_autocompact(self) -> None:
+        """若当前窗口占用超过 auto 阈值，尝试摘要重建。
+
+        非法配置 fail-closed：本轮跳过。摘要失败不阻塞本轮，连续失败达上限后熔断。
+        """
+        if not self.cfg.enable_autocompact:
+            return
+        if self._autocompact_consecutive_failures >= MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES:
+            return
+
+        try:
+            threshold = get_autocompact_threshold(
+                self.provider.model,
+                self.cfg.compact_reserved_output_tokens,
+                self.cfg.autocompact_buffer_tokens,
+                override=self.cfg.context_window_override,
+            )
+        except ValueError as e:
+            self.console.print(f"[dim]autocompact: 配置非法（{e}），本轮跳过[/dim]")
+            return
+
+        current_tokens = estimate_context_tokens(
+            self.messages, self.last_call_usage, self.last_call_message_index
+        )
+        if not should_autocompact(current_tokens, threshold):
+            return
+
+        try:
+            self._apply_full_compact("auto")
+            self._autocompact_consecutive_failures = 0
+            self.console.print(
+                f"[dim]auto compact: 已摘要重建"
+                f"（占用≈{current_tokens} / 阈值 {threshold}）[/dim]"
+            )
+        except CompactError as e:
+            self._autocompact_consecutive_failures += 1
+            self.console.print(
+                f"[dim]auto compact 失败（{e}），本轮继续携带原上下文[/dim]"
+            )
 
     def _maybe_microcompact(self) -> None:
         """若当前窗口占用超过阈值，清理旧 compactable tool_result。
@@ -223,6 +300,7 @@ class Agent:
 
         for _turn in range(self.cfg.max_turns):
             self._maybe_microcompact()
+            self._maybe_autocompact()
             response = self._call_model(tools)
             self._print_usage(response)
 
@@ -241,6 +319,7 @@ class Agent:
             # usage 覆盖到本条助手消息为止；之后的消息计入增量估算
             self.last_call_usage = response.usage
             self.last_call_message_index = len(self.messages)
+            self._persist_usage_snapshot()
 
             if not tool_uses:
                 text = response.text() or "（模型未返回文本）"

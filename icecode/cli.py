@@ -14,9 +14,11 @@ from icecode.agent import Agent
 from icecode.config import load_config
 from icecode.llm.factory import create_provider
 from icecode.session import (
+    SessionState,
+    empty_session_state,
     latest_session,
     list_sessions,
-    load_transcript,
+    load_session_state,
     new_session_id,
     transcript_path,
 )
@@ -88,38 +90,37 @@ def _pick_resume_session(workdir: str) -> tuple[str, Path, int] | None:
         return None
 
     chosen = sessions[idx - 1]
-    loaded = load_transcript(chosen.path)
-    return chosen.session_id, chosen.path, len(loaded)
+    loaded = load_session_state(chosen.path)
+    return chosen.session_id, chosen.path, len(loaded.messages)
 
 
 def _resolve_session(
     workdir: str, *, continue_session: bool, resume_session: bool
-) -> tuple[str, Path, list]:
-    """返回 (session_id, path, loaded_messages)。"""
+) -> tuple[str, Path, SessionState]:
+    """返回 (session_id, path, SessionState)。"""
     if continue_session:
         latest = latest_session(workdir)
         if latest is None:
             console.print("[yellow]没有可继续的会话，将开启新会话。[/yellow]")
         else:
-            messages = load_transcript(latest.path)
-            return latest.session_id, latest.path, messages
+            return latest.session_id, latest.path, load_session_state(latest.path)
 
     if resume_session:
         picked = _pick_resume_session(workdir)
         if picked is not None:
             session_id, path, _n = picked
-            return session_id, path, load_transcript(path)
+            return session_id, path, load_session_state(path)
 
     session_id = new_session_id()
     path = transcript_path(workdir, session_id)
-    return session_id, path, []
+    return session_id, path, empty_session_state()
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     cfg = load_config()
 
-    session_id, session_path, loaded_messages = _resolve_session(
+    session_id, session_path, loaded = _resolve_session(
         cfg.workdir,
         continue_session=args.continue_session,
         resume_session=args.resume_session,
@@ -127,8 +128,8 @@ def main(argv: list[str] | None = None) -> None:
 
     tools_label = "on" if cfg.enable_tools else "off (chat-only)"
     stream_label = "on" if cfg.enable_streaming else "off"
-    if loaded_messages:
-        session_label = f"{session_id[:8]} (已恢复 {len(loaded_messages)} 条消息)"
+    if loaded.messages:
+        session_label = f"{session_id[:8]} (已恢复 {len(loaded.messages)} 条消息)"
     else:
         session_label = f"{session_id[:8]} (new)"
 
@@ -163,8 +164,10 @@ def main(argv: list[str] | None = None) -> None:
         console=console,
         session_path=session_path,
     )
-    if loaded_messages:
-        agent.messages = loaded_messages
+    if loaded.messages:
+        agent.messages = loaded.messages
+        agent.last_call_usage = loaded.last_usage
+        agent.last_call_message_index = loaded.last_usage_message_index
 
     console.print("[dim]输入你的需求，输入 exit / quit 退出。[/dim]\n")
 
