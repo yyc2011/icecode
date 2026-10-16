@@ -23,7 +23,7 @@ class Config:
     provider: str = os.getenv("LLM_PROVIDER", "deepseek")
 
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
     deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
@@ -54,6 +54,18 @@ class Config:
     )
     # 非空正整数时覆盖模型查表窗口；None 表示不覆盖
     context_window_override: int | None = None
+
+    # auto compact：超阈值时摘要重建（与 microcompact 使用独立 buffer / 预留输出）
+    enable_autocompact: bool = (
+        os.getenv("ICECODE_ENABLE_AUTOCOMPACT", "true").lower() != "false"
+    )
+    autocompact_buffer_tokens: int = int(
+        os.getenv("ICECODE_AUTOCOMPACT_BUFFER_TOKENS", "13000")
+    )
+    # 摘要调用自身的 max_tokens，不与普通回复的 MAX_TOKENS 混用
+    compact_reserved_output_tokens: int = int(
+        os.getenv("ICECODE_COMPACT_RESERVED_OUTPUT_TOKENS", "8000")
+    )
 
     def __post_init__(self) -> None:
         mode = os.getenv("PERMISSION_MODE", "default").lower()

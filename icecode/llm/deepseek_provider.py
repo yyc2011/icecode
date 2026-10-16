@@ -28,7 +28,7 @@ class DeepSeekProvider(LLMProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "deepseek-chat",
+        model: str = "deepseek-v4-pro",
         base_url: str = "https://api.deepseek.com",
     ):
         from openai import OpenAI

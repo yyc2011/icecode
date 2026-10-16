@@ -83,7 +83,7 @@ icecode/
 | --- | --- | --- |
 | `LLM_PROVIDER` | `deepseek` | `deepseek` 或 `anthropic` |
 | `DEEPSEEK_API_KEY` | — | DeepSeek API Key（默认 Provider 必填） |
-| `DEEPSEEK_MODEL` | `deepseek-chat` | DeepSeek 模型名 |
+| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | DeepSeek 模型名 |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API 地址 |
 | `ANTHROPIC_API_KEY` | — | Anthropic API Key（切换 Provider 时填） |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Anthropic 模型名 |

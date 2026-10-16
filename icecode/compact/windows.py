@@ -1,4 +1,4 @@
-"""模型上下文窗口与 microcompact 阈值计算。"""
+"""模型上下文窗口与压缩阈值计算。"""
 
 from __future__ import annotations
 
@@ -52,8 +52,8 @@ def get_effective_context_window(model: str, reserved_output_tokens: int, *, ove
     return effective
 
 
-def get_microcompact_threshold(effective_window: int, buffer_tokens: int) -> int:
-    """microcompact 触发阈值 = 有效窗口 − buffer。
+def get_buffer_threshold(effective_window: int, buffer_tokens: int) -> int:
+    """触发阈值 = 有效窗口 − buffer。
 
     effective_window ≤ 0、buffer < 0、或阈值 ≤ 0 时抛 ValueError。
     """
@@ -64,10 +64,14 @@ def get_microcompact_threshold(effective_window: int, buffer_tokens: int) -> int
     threshold = effective_window - buffer_tokens
     if threshold <= 0:
         raise ValueError(
-            f"microcompact threshold must be > 0 "
+            f"threshold must be > 0 "
             f"(effective={effective_window}, buffer={buffer_tokens})"
         )
     return threshold
+
+
+# 向后兼容：microcompact 与 auto compact 共用同一公式
+get_microcompact_threshold = get_buffer_threshold
 
 
 def is_above_threshold(current_tokens: int, threshold: int) -> bool:

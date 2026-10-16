@@ -11,13 +11,14 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from icecode.llm.base import (
     Message,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
+    Usage,
 )
 
 ICECODE_HOME_DEFAULT = "~/.icecode"
@@ -91,6 +92,7 @@ def content_block_from_dict(data: dict[str, Any]) -> TextBlock | ToolUseBlock | 
 
 def message_to_dict(message: Message) -> dict[str, Any]:
     return {
+        "type": "message",
         "role": message.role,
         "content": [content_block_to_dict(b) for b in message.content],
     }
@@ -104,25 +106,125 @@ def message_from_dict(data: dict[str, Any]) -> Message:
     return Message(role=role, content=content)
 
 
-def append_message(path: Path, message: Message) -> None:
+def _append_jsonl(path: Path, obj: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(message_to_dict(message), ensure_ascii=False)
+    line = json.dumps(obj, ensure_ascii=False)
     with path.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
         f.flush()
 
 
-def load_transcript(path: Path) -> list[Message]:
+def append_message(path: Path, message: Message) -> None:
+    _append_jsonl(path, message_to_dict(message))
+
+
+def append_compact_boundary(
+    path: Path,
+    trigger: Literal["auto", "manual"],
+    pre_tokens: int,
+) -> None:
+    """写入 compact 分界行（本地元数据，不发给模型）。"""
+    _append_jsonl(
+        path,
+        {
+            "type": "compact_boundary",
+            "trigger": trigger,
+            "pre_tokens": pre_tokens,
+        },
+    )
+
+
+def append_usage_snapshot(path: Path, usage: Usage, after_index: int) -> None:
+    """写入窗口占用估算用的 usage 快照（本地元数据，不发给模型）。"""
+    _append_jsonl(
+        path,
+        {
+            "type": "usage_snapshot",
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "after_index": after_index,
+        },
+    )
+
+
+def _record_kind(data: dict[str, Any]) -> str:
+    """判别 JSONL 行类型。无 type 但有 role 的旧格式视为 message。"""
+    kind = data.get("type")
+    if kind in ("message", "compact_boundary", "usage_snapshot"):
+        return kind
+    if data.get("role") in ("user", "assistant"):
+        return "message"
+    return "unknown"
+
+
+def _iter_jsonl_records(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
-    messages: list[Message] = []
+    records: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            messages.append(message_from_dict(json.loads(line)))
+            records.append(json.loads(line))
+    return records
+
+
+def load_transcript(path: Path) -> list[Message]:
+    """只还原 message 行；静默跳过 boundary / usage 等旁路记录。"""
+    messages: list[Message] = []
+    for data in _iter_jsonl_records(path):
+        if _record_kind(data) != "message":
+            continue
+        messages.append(message_from_dict(data))
     return messages
+
+
+@dataclass
+class SessionState:
+    """resume 用的活跃段：messages + 占用估算指针。"""
+
+    messages: list[Message]
+    last_usage: Usage
+    last_usage_message_index: int
+
+
+def empty_session_state() -> SessionState:
+    return SessionState(messages=[], last_usage=Usage(), last_usage_message_index=0)
+
+
+def load_session_state(path: Path) -> SessionState:
+    """从 JSONL 恢复活跃段。
+
+    遇到 compact_boundary 时丢弃此前 messages 与 usage 快照（旧占用作废）。
+    usage_snapshot 只在当前 boundary 段内生效。
+    """
+    messages: list[Message] = []
+    last_usage = Usage()
+    last_usage_message_index = 0
+
+    for data in _iter_jsonl_records(path):
+        kind = _record_kind(data)
+        if kind == "compact_boundary":
+            messages = []
+            last_usage = Usage()
+            last_usage_message_index = 0
+            continue
+        if kind == "usage_snapshot":
+            last_usage = Usage(
+                input_tokens=int(data.get("input_tokens") or 0),
+                output_tokens=int(data.get("output_tokens") or 0),
+            )
+            last_usage_message_index = int(data.get("after_index") or 0)
+            continue
+        if kind == "message":
+            messages.append(message_from_dict(data))
+
+    return SessionState(
+        messages=messages,
+        last_usage=last_usage,
+        last_usage_message_index=last_usage_message_index,
+    )
 
 
 @dataclass
