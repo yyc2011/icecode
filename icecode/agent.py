@@ -28,6 +28,7 @@ from icecode.compact.windows import (
     get_microcompact_threshold,
     is_above_threshold,
 )
+from icecode import observability as obs
 from icecode.config import Config
 from icecode.llm.base import (
     LLMProvider,
@@ -240,6 +241,33 @@ class Agent:
             f"（占用≈{current_tokens} / 阈值 {threshold}）[/dim]"
         )
 
+    # 薄包装：as_type="generation" 显式声明为模型调用，补充 model / usage / output
+    @obs.observe(
+        as_type="generation", name="call_model", capture_input=False, capture_output=False
+    )
+    def _traced_call_model(self, tools: list) -> LLMResponse:
+        response = self._call_model(tools)
+        obs.update_generation(
+            model=self.provider.model,
+            usage_details={
+                "input": response.usage.input_tokens,
+                "output": response.usage.output_tokens,
+            },
+            output=obs.maybe_text(response.text()),
+        )
+        return response
+
+    # 薄包装：as_type="span" 显式声明为普通子操作；span 名改为真实工具名
+    @obs.observe(as_type="span", capture_input=False, capture_output=False)
+    def _traced_execute_tool(self, name: str, tool_input: dict) -> tuple[str, bool]:
+        obs.update_span(name=name, input=obs.maybe_args(name, tool_input))
+        result_text, is_error = self._execute_tool(name, tool_input)
+        obs.update_span(
+            output=obs.maybe_text(result_text),
+            level="ERROR" if is_error else "DEFAULT",
+        )
+        return result_text, is_error
+
     def _call_model(self, tools: list) -> LLMResponse:
         if not self.cfg.enable_streaming:
             response = self.provider.create_message(
@@ -294,6 +322,9 @@ class Agent:
             raise RuntimeError("模型流式响应未返回 StreamDone")
         return response
 
+    # 最外层调用：自动成为一次 Trace 的根（没有 as_type="trace" 选项）；
+    # observe_turn 内部同时把会话 id 记为 session_id
+    @obs.observe_turn
     def run_turn(self, user_input: str) -> str:
         self._record_message(Message.user_text(user_input))
         tools = self.registry.schemas() if self.cfg.enable_tools else []
@@ -301,7 +332,7 @@ class Agent:
         for _turn in range(self.cfg.max_turns):
             self._maybe_microcompact()
             self._maybe_autocompact()
-            response = self._call_model(tools)
+            response = self._traced_call_model(tools)
             self._print_usage(response)
 
             # stop_reason=tool_use 并不可靠；以 content 是否含 tool_use 为准
@@ -337,7 +368,7 @@ class Agent:
             tool_results = []
             try:
                 for tool_use in tool_uses:
-                    result_text, is_error = self._execute_tool(
+                    result_text, is_error = self._traced_execute_tool(
                         tool_use.name, tool_use.input
                     )
                     tool_results.append(
