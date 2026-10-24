@@ -8,6 +8,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal, Union
 
 
@@ -87,6 +88,8 @@ class LLMResponse:
     content: list[ContentBlock]
     stop_reason: Literal["end_turn", "tool_use", "max_tokens", "error"]
     usage: Usage = field(default_factory=Usage)
+    # 流式响应里第一个输出块（文本或工具调用）到达的 UTC 时刻。非流式调用保持 None。
+    first_token_at: datetime | None = None
 
     def tool_uses(self) -> list[ToolUseBlock]:
         return [b for b in self.content if isinstance(b, ToolUseBlock)]

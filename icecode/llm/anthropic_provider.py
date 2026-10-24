@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import Any
 
 from icecode.llm.base import (
@@ -125,6 +126,7 @@ class AnthropicProvider(LLMProvider):
         blocks_by_index: dict[int, dict[str, Any]] = {}
         usage = Usage()
         stop_reason: str | None = None
+        first_token_at: datetime | None = None
 
         for event in stream:
             etype = getattr(event, "type", None)
@@ -143,6 +145,9 @@ class AnthropicProvider(LLMProvider):
                 if block is None:
                     continue
                 btype = getattr(block, "type", None)
+                # message_start 只说明请求已被接受，输出尚未开始。
+                if first_token_at is None and btype in ("text", "tool_use"):
+                    first_token_at = datetime.now(timezone.utc)
                 if btype == "text":
                     blocks_by_index[idx] = {"kind": "text", "text": ""}
                 elif btype == "tool_use":
@@ -213,5 +218,6 @@ class AnthropicProvider(LLMProvider):
                 content=content,
                 stop_reason=self._normalize_stop_reason(stop_reason),  # type: ignore[arg-type]
                 usage=usage,
+                first_token_at=first_token_at,
             )
         )

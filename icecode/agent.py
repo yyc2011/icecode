@@ -21,7 +21,7 @@ from icecode.compact.autocompact import (
 )
 from icecode.compact.full_compact import CompactError, run_full_compact
 from icecode.compact.microcompact import microcompact_messages
-from icecode.compact.prompt import build_compact_user_message
+from icecode.compact.prompt import build_compact_system_prompt, build_compact_user_message
 from icecode.compact.tokens import estimate_context_tokens
 from icecode.compact.windows import (
     get_effective_context_window,
@@ -133,10 +133,24 @@ class Agent:
                 self.session_path, self.last_call_usage, self.last_call_message_index
             )
 
+    @obs.observe(
+        as_type="generation",
+        name="compact_model",
+        capture_input=False,
+        capture_output=False,
+    )
     def _apply_full_compact(self, trigger: Literal["auto", "manual"]) -> None:
         """摘要重建 messages，并作废压缩前的占用快照。"""
         pre_tokens = estimate_context_tokens(
             self.messages, self.last_call_usage, self.last_call_message_index
+        )
+        obs.start_generation(
+            self.provider.model,
+            max_tokens=self.cfg.compact_reserved_output_tokens,
+            temperature=0.0,
+            system=build_compact_system_prompt(),
+            messages=self.messages,
+            tools=[],
         )
         result = run_full_compact(
             self.messages,
@@ -144,6 +158,7 @@ class Agent:
             reserved_output_tokens=self.cfg.compact_reserved_output_tokens,
         )
         self.total_usage = accumulate_usage(self.total_usage, result.usage)
+        obs.finish_generation(result.usage, obs.maybe_text(result.summary_text))
         transcript = str(self.session_path) if self.session_path is not None else None
         summary_message = Message.user_text(
             build_compact_user_message(result.summary_text, transcript)
@@ -241,19 +256,26 @@ class Agent:
             f"（占用≈{current_tokens} / 阈值 {threshold}）[/dim]"
         )
 
-    # 薄包装：as_type="generation" 显式声明为模型调用，补充 model / usage / output
+    # 薄包装：as_type="generation" 显式声明为模型调用。
+    # input 是这次发给模型的 system、messages、tools；model / 参数 / usage 写在 generation 字段上。
     @obs.observe(
         as_type="generation", name="call_model", capture_input=False, capture_output=False
     )
     def _traced_call_model(self, tools: list) -> LLMResponse:
+        obs.start_generation(
+            self.provider.model,
+            max_tokens=self.cfg.max_tokens,
+            temperature=self.cfg.temperature,
+            system=self.system_prompt,
+            messages=self.messages,
+            tools=tools,
+        )
         response = self._call_model(tools)
-        obs.update_generation(
-            model=self.provider.model,
-            usage_details={
-                "input": response.usage.input_tokens,
-                "output": response.usage.output_tokens,
-            },
-            output=obs.maybe_text(response.text()),
+        # 非流式没有「第一个输出块」这个时刻，first_token_at 为 None 时不上报。
+        obs.finish_generation(
+            response.usage,
+            obs.llm_response_output(response),
+            first_token_at=response.first_token_at,
         )
         return response
 
@@ -322,7 +344,7 @@ class Agent:
             raise RuntimeError("模型流式响应未返回 StreamDone")
         return response
 
-    # 最外层调用：自动成为一次 Trace 的根（没有 as_type="trace" 选项）；
+    # 最外层：一条 trace（一次用户命令），根节点类型是 agent；
     # observe_turn 内部同时把会话 id 记为 session_id
     @obs.observe_turn
     def run_turn(self, user_input: str) -> str:

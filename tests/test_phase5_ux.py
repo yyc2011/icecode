@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +12,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from icecode.llm.base import (
+    LLMProvider,
+    LLMResponse,
     Message,
     StreamDone,
     TextBlock,
@@ -212,6 +215,8 @@ def test_deepseek_stream_text_and_tool_calls() -> None:
     assert tools[0].id == "call_1"
     assert tools[0].name == "read_file"
     assert tools[0].input == {"path": "a.py"}
+    assert resp.first_token_at is not None
+    assert resp.first_token_at.tzinfo is timezone.utc
 
 
 # ---------- Anthropic streaming mock ----------
@@ -292,3 +297,137 @@ def test_anthropic_stream_text_and_tool_use() -> None:
     assert tools[0].id == "toolu_1"
     assert tools[0].name == "grep_search"
     assert tools[0].input == {"pattern": "foo"}
+    assert resp.first_token_at is not None
+    assert resp.first_token_at.tzinfo is timezone.utc
+
+
+def _freeze_now(monkeypatch: pytest.MonkeyPatch, module: str, stamps: list[datetime]) -> None:
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if not stamps:
+                raise AssertionError("首个输出块的时刻被记录了多次")
+            return stamps.pop(0)
+
+    monkeypatch.setattr(module, Frozen)
+
+
+def test_deepseek_stream_first_token_is_first_output_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    stamp = datetime(2026, 10, 25, 0, 0, 1, tzinfo=timezone.utc)
+    _freeze_now(monkeypatch, "icecode.llm.deepseek_provider.datetime", [stamp])
+    provider = DeepSeekProvider.__new__(DeepSeekProvider)
+    provider._model = "deepseek-chat"
+    chunks = [
+        _ns(usage=_ns(prompt_tokens=1, completion_tokens=0), choices=[]),
+        _ns(
+            usage=None,
+            choices=[_ns(finish_reason=None, delta=_ns(content="", tool_calls=None))],
+        ),
+        _ns(
+            usage=None,
+            choices=[
+                _ns(
+                    finish_reason="tool_calls",
+                    delta=_ns(
+                        content=None,
+                        tool_calls=[
+                            _ns(index=0, id="call_1", function=_ns(name="read_file", arguments="{}"))
+                        ],
+                    ),
+                )
+            ],
+        ),
+    ]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = iter(chunks)
+    provider._client = mock_client
+
+    events = list(
+        provider.stream_message(messages=[Message.user_text("hi")], system="sys", tools=[])
+    )
+    done = next(event for event in events if isinstance(event, StreamDone))
+    assert not any(isinstance(event, TextDelta) for event in events)
+    assert done.response.first_token_at == stamp
+
+
+def test_deepseek_stream_without_output_has_no_first_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Boom(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            raise AssertionError("没有输出块时不应记录首 token 时刻")
+
+    monkeypatch.setattr("icecode.llm.deepseek_provider.datetime", Boom)
+    provider = DeepSeekProvider.__new__(DeepSeekProvider)
+    provider._model = "deepseek-chat"
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = iter(
+        [_ns(usage=_ns(prompt_tokens=1, completion_tokens=0), choices=[])]
+    )
+    provider._client = mock_client
+
+    events = list(
+        provider.stream_message(messages=[Message.user_text("hi")], system="sys", tools=[])
+    )
+    done = next(event for event in events if isinstance(event, StreamDone))
+    assert done.response.first_token_at is None
+
+
+def test_anthropic_stream_first_token_skips_message_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    stamp = datetime(2026, 10, 25, 0, 0, 2, tzinfo=timezone.utc)
+    _freeze_now(monkeypatch, "icecode.llm.anthropic_provider.datetime", [stamp])
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider._model = "claude-sonnet-4-6"
+    events_in = [
+        _ns(type="message_start", message=_ns(usage=_ns(input_tokens=3, output_tokens=0))),
+        _ns(type="content_block_start", index=0, content_block=_ns(type="thinking")),
+        _ns(
+            type="content_block_start",
+            index=1,
+            content_block=_ns(type="tool_use", id="toolu_1", name="read_file"),
+        ),
+        _ns(
+            type="content_block_delta",
+            index=1,
+            delta=_ns(type="input_json_delta", partial_json="{}"),
+        ),
+        _ns(type="message_delta", delta=_ns(stop_reason="tool_use"), usage=_ns(output_tokens=2)),
+        _ns(type="message_stop"),
+    ]
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = iter(events_in)
+    provider._client = mock_client
+
+    events = list(
+        provider.stream_message(messages=[Message.user_text("hi")], system="sys", tools=[])
+    )
+    done = next(event for event in events if isinstance(event, StreamDone))
+    assert done.response.first_token_at == stamp
+    assert done.response.stop_reason == "tool_use"
+
+
+def test_nonstreaming_fallback_does_not_invent_first_token() -> None:
+    class EchoProvider(LLMProvider):
+        name = "echo"
+
+        def __init__(self) -> None:
+            self.model = "echo"
+
+        def create_message(
+            self,
+            messages: list[Message],
+            system: str,
+            tools: list,
+            max_tokens: int = 4096,
+            temperature: float = 0.3,
+        ) -> LLMResponse:
+            return LLMResponse(
+                content=[TextBlock(text="all at once")],
+                stop_reason="end_turn",
+                usage=Usage(input_tokens=1, output_tokens=1),
+            )
+
+    events = list(
+        EchoProvider().stream_message(messages=[Message.user_text("hi")], system="sys", tools=[])
+    )
+    done = next(event for event in events if isinstance(event, StreamDone))
+    assert done.response.first_token_at is None
