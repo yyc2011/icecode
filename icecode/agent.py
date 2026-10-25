@@ -6,12 +6,14 @@ Agent Loop：LLM 决策 → 工具执行 → 多轮直到完成。
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Literal
 
 from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 
 from icecode.compact.autocompact import (
@@ -42,33 +44,25 @@ from icecode.llm.base import (
     Usage,
     accumulate_usage,
 )
+from icecode.agents.builtin import ALL_AGENT_DISALLOWED_TOOLS, AGENT_TOOL_NAME, get_agent_definition
 from icecode.permissions import PermissionDenied, PermissionManager
 from icecode.project_context import build_project_context_block
+from icecode.prompts import DELEGATION_GUIDE, TOOL_USAGE_GUIDE, WORKING_PRINCIPLES
 from icecode.session import append_compact_boundary, append_message, append_usage_snapshot
+from icecode.tools.agent_tool import AgentTool
 from icecode.tools.base import ToolError
 from icecode.tools.registry import ToolRegistry
 
-SYSTEM_PROMPT_TEMPLATE = """\
-你是 IceCode，一个运行在命令行里的编程助手，工作目录是: {workdir}
-
-你可以使用提供的工具来读取/搜索/编辑文件，以及执行 shell 命令来完成用户的任务。
-
-工作原则：
-1. 在动手修改代码前，先用 glob_search / grep_search / read_file 了解相关代码，不要凭空猜测。
-2. 修改已有文件时优先使用 edit_file 做精确替换，只有新建文件才用 write_file。
-3. 每次只做用户明确要求或任务明显需要的改动，不要顺便重构无关代码。
-4. 完成任务后用简洁的中文总结做了什么改动。
-
-# 使用工具（专用工具优先）
-- 读文件用 read_file，不要用 bash 的 cat/head/tail/sed。
-- 改文件用 edit_file，不要用 bash 的 sed/awk。
-- 新建文件用 write_file，不要用 bash 的 cat heredoc / echo 重定向。
-- 找文件用 glob_search，不要用 find/ls；搜内容用 grep_search，不要用 grep/rg。
-- bash 只用于需要 shell 执行的系统命令与终端操作（跑测试、git、安装依赖等）。
-  若存在对应专用工具，默认用专用工具；仅当专用工具失败或不可用（例如 edit_file 因文件过大被拒）时，
-  才回退到 bash，并用流式方式处理（如 sed -i、awk、python 按行读写），避免把整文件读进内存。
-{project_context}
-"""
+SYSTEM_PROMPT_TEMPLATE = (
+    "你是 IceCode，一个运行在命令行里的编程助手，工作目录是: {workdir}\n\n"
+    "你可以使用提供的工具来读取/搜索/编辑文件，以及执行 shell 命令来完成用户的任务。\n\n"
+    + WORKING_PRINCIPLES
+    + "\n"
+    + TOOL_USAGE_GUIDE
+    + "\n"
+    + DELEGATION_GUIDE
+    + "{project_context}\n"
+)
 
 SYSTEM_PROMPT_CHAT_ONLY = """\
 你是 IceCode，一个运行在命令行里的编程助手，工作目录是: {workdir}
@@ -86,13 +80,19 @@ class Agent:
         cfg: Config,
         console: Console,
         session_path: Path | None = None,
+        *,
+        permission_manager: PermissionManager | None = None,
+        system_prompt: str | None = None,
+        is_subagent: bool = False,
     ):
         self.provider = provider
         self.registry = registry
         self.cfg = cfg
         self.console = console
         self.session_path = session_path
-        self.permission_manager = PermissionManager(
+        self.is_subagent = is_subagent
+        # 子 Agent 传入父的 PermissionManager：mode / 已放行 / 会话 deny 全部继承
+        self.permission_manager = permission_manager or PermissionManager(
             console,
             auto_approve=cfg.auto_approve,
             mode=cfg.permission_mode,
@@ -103,7 +103,10 @@ class Agent:
         self.last_call_usage = Usage()
         self.last_call_message_index = 0
         self._autocompact_consecutive_failures = 0
-        self.system_prompt = self._build_system_prompt()
+        # 仅父 Agent 注册 agent 工具；子 Agent 的 registry 本就不含它（禁止递归派生）
+        if cfg.enable_tools and not is_subagent and registry.get(AGENT_TOOL_NAME) is None:
+            registry.register(AgentTool(runner=self._run_subagent))
+        self.system_prompt = system_prompt or self._build_system_prompt()
 
     def _build_system_prompt(self) -> str:
         project_context = build_project_context_block(self.cfg.workdir)
@@ -120,6 +123,8 @@ class Agent:
 
     def _print_usage(self, response: LLMResponse) -> None:
         self.total_usage = accumulate_usage(self.total_usage, response.usage)
+        if self.is_subagent:
+            return  # 子 Agent 静默；结束时由父打印一行汇总
         self.console.print(
             f"[dim]usage: 本次 input={response.usage.input_tokens} "
             f"output={response.usage.output_tokens} · "
@@ -151,6 +156,7 @@ class Agent:
             system=build_compact_system_prompt(),
             messages=self.messages,
             tools=[],
+            name="subagent_compact_model" if self.is_subagent else None,
         )
         result = run_full_compact(
             self.messages,
@@ -269,6 +275,7 @@ class Agent:
             system=self.system_prompt,
             messages=self.messages,
             tools=tools,
+            name="subagent_call_model" if self.is_subagent else None,
         )
         response = self._call_model(tools)
         # 非流式没有「第一个输出块」这个时刻，first_token_at 为 None 时不上报。
@@ -348,6 +355,10 @@ class Agent:
     # observe_turn 内部同时把会话 id 记为 session_id
     @obs.observe_turn
     def run_turn(self, user_input: str) -> str:
+        return self._run_loop(user_input)
+
+    def _run_loop(self, user_input: str) -> str:
+        """Agent Loop 本体。子 Agent 直接调它（不经 observe_turn，避免覆盖父 trace 的名字与 session）。"""
         self._record_message(Message.user_text(user_input))
         tools = self.registry.schemas() if self.cfg.enable_tools else []
 
@@ -377,14 +388,14 @@ class Agent:
             if not tool_uses:
                 text = response.text() or "（模型未返回文本）"
                 # 非流式：Agent 负责最终 Panel；流式：Live 已渲染
-                if not self.cfg.enable_streaming:
+                if not self.cfg.enable_streaming and not self.is_subagent:
                     self.console.print(
                         Panel(Markdown(text), title="assistant", border_style="green")
                     )
                 return text
 
-            # 中间轮（还有 tool_use）：非流式补打文本说明
-            if response.text() and not self.cfg.enable_streaming:
+            # 中间轮（还有 tool_use）：非流式补打文本说明（子 Agent 静默）
+            if response.text() and not self.cfg.enable_streaming and not self.is_subagent:
                 self.console.print(response.text())
 
             tool_results = []
@@ -420,8 +431,62 @@ class Agent:
 
         return "⚠ 已达到单次任务最大轮数限制，任务可能未完全完成。"
 
+    def _run_subagent(self, description: str, prompt: str, subagent_type: str) -> str:
+        """派生同步子 Agent：全新 messages、过滤后的工具集、共享父的权限管理器。
+
+        只回传子 Agent 最后一条文本；其 token 用量并入父的累计计费，但不碰父的窗口占用快照。
+        """
+        definition = get_agent_definition(subagent_type)
+        if definition is None:
+            raise ToolError(f"未知 subagent_type: {subagent_type}")
+
+        child_registry = self.registry.subset(
+            definition.tools,
+            ALL_AGENT_DISALLOWED_TOOLS | definition.disallowed_tools,
+        )
+        # copy 而非 dataclasses.replace：后者会重跑 __post_init__，从环境变量覆盖 permission_mode
+        child_cfg = copy.copy(self.cfg)
+        child_cfg.enable_streaming = False
+        project_context = (
+            ""
+            if definition.omit_project_context
+            else build_project_context_block(self.cfg.workdir)
+        )
+        child = Agent(
+            provider=self.provider,
+            registry=child_registry,
+            cfg=child_cfg,
+            console=self.console,
+            permission_manager=self.permission_manager,
+            system_prompt=definition.build_system_prompt(self.cfg.workdir, project_context),
+            is_subagent=True,
+        )
+
+        obs.update_span(metadata={"subagent_type": definition.name})
+        self.console.print(
+            f"[dim]⇢ 子 Agent {definition.name}: {escape(description) or '(无描述)'}[/dim]"
+        )
+        try:
+            with obs.subagent_scope(definition.name):
+                return child._run_loop(prompt)
+        finally:
+            # 中断/异常时也要计入已发生的花费
+            self.total_usage = accumulate_usage(self.total_usage, child.total_usage)
+            tool_calls = sum(
+                1
+                for m in child.messages
+                for b in m.content
+                if isinstance(b, ToolUseBlock)
+            )
+            self.console.print(
+                f"[dim]⇠ 子 Agent {definition.name} 结束: 工具调用 {tool_calls} 次 · "
+                f"input={child.total_usage.input_tokens} "
+                f"output={child.total_usage.output_tokens}[/dim]"
+            )
+
     def _execute_tool(self, name: str, tool_input: dict) -> tuple[str, bool]:
-        self.console.print(f"[dim]→ 调用工具 {name}({tool_input})[/dim]")
+        prefix = "  ↳ " if self.is_subagent else ""
+        self.console.print(f"[dim]{prefix}→ 调用工具 {name}({tool_input})[/dim]")
         try:
             result = self.registry.execute(name, tool_input, self.permission_manager)
             return result, False

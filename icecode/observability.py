@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import os
+from contextlib import nullcontext
 from datetime import datetime
 from typing import Any
 
@@ -97,13 +98,31 @@ def start_generation(
     system: str,
     messages: list[Message],
     tools: list[ToolSchema],
+    name: str | None = None,
 ) -> None:
-    """模型调用开始：写 model、参数与发给模型的 input。"""
+    """模型调用开始：写 model、参数与发给模型的 input；可选覆盖 generation 名。"""
+    extra: dict[str, Any] = {"name": name} if name else {}
     update_generation(
         model=model,
         model_parameters={"max_tokens": max_tokens, "temperature": temperature},
         input=llm_request_input(system, messages, tools),
+        **extra,
     )
+
+
+def subagent_scope(subagent_type: str):
+    """子 Agent 运行期间的上下文：把 subagent_type 等 metadata 传播给其内部所有 observation。
+
+    未启用 Langfuse 或 SDK 出错时退化为空上下文。
+    """
+    if not _ENABLED:
+        return nullcontext()
+    try:
+        return _propagate_attributes(
+            metadata={"subagent_type": subagent_type, "is_subagent": "true"}
+        )
+    except Exception:
+        return nullcontext()
 
 
 def finish_generation(
