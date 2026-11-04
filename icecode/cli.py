@@ -58,7 +58,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="列出历史会话并选择恢复",
     )
+    group.add_argument(
+        "-p",
+        "--print",
+        dest="print_prompt",
+        metavar="PROMPT",
+        help="非交互：执行一条 prompt，打印最终回答后退出；需确认的操作一律拒绝",
+    )
     return parser.parse_args(argv)
+
+
+def _run_print(prompt: str) -> None:
+    """非交互入口：最终回答写 stdout，错误写 stderr 并以非零码退出。"""
+    from icecode.headless import run_prompt
+
+    try:
+        text = run_prompt(prompt)
+    except RuntimeError as e:
+        print(f"配置错误: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"发生错误: {type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        obs.flush()
+    print(text)
 
 
 def _pick_resume_session(workdir: str) -> tuple[str, Path, int] | None:
@@ -119,6 +143,9 @@ def _resolve_session(
 
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
+    if args.print_prompt is not None:
+        _run_print(args.print_prompt)
+        return
     cfg = load_config()
 
     session_id, session_path, loaded = _resolve_session(
