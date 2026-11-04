@@ -1,10 +1,13 @@
 """
 工具注册表。执行管线：查找 → validate → 权限 → execute → format_result。
 
-后续可在 build_default_registry 中 register 任务清单 / 子代理 / MCP 等工具。
+子 Agent 工具由 Agent 构造时注入（需要父 Agent 的运行时上下文）；
+后续可在 build_default_registry 中 register 任务清单 / MCP 等工具。
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 from icecode.llm.base import ToolSchema
 from icecode.permissions import PermissionManager
@@ -23,6 +26,21 @@ class ToolRegistry:
 
     def get(self, name: str):
         return self._tools.get(name)
+
+    def subset(
+        self, allow: Iterable[str] | None, deny: Iterable[str] = ()
+    ) -> ToolRegistry:
+        """返回新 registry（共享 Tool 实例）。allow=None 表示通配；deny 优先于 allow。"""
+        denied = set(deny)
+        allowed = None if allow is None else set(allow)
+        child = ToolRegistry()
+        for name, tool in self._tools.items():
+            if name in denied:
+                continue
+            if allowed is not None and name not in allowed:
+                continue
+            child.register(tool)
+        return child
 
     def execute(
         self, name: str, tool_input: dict, permission_manager: PermissionManager

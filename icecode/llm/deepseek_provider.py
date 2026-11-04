@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import Any
 
 from icecode.llm.base import (
@@ -171,6 +172,7 @@ class DeepSeekProvider(LLMProvider):
         tool_acc: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage = Usage()
+        first_token_at: datetime | None = None
 
         for chunk in stream:
             if getattr(chunk, "usage", None):
@@ -189,6 +191,10 @@ class DeepSeekProvider(LLMProvider):
             delta = choice.delta
             if delta is None:
                 continue
+
+            # 只有 role、空内容，或仅带 usage / finish_reason 的块不算输出。
+            if first_token_at is None and (delta.content or delta.tool_calls):
+                first_token_at = datetime.now(timezone.utc)
 
             if delta.content:
                 text_parts.append(delta.content)
@@ -235,5 +241,10 @@ class DeepSeekProvider(LLMProvider):
             stop_reason = "end_turn"
 
         yield StreamDone(
-            LLMResponse(content=blocks, stop_reason=stop_reason, usage=usage)
+            LLMResponse(
+                content=blocks,
+                stop_reason=stop_reason,
+                usage=usage,
+                first_token_at=first_token_at,
+            )
         )

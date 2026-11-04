@@ -10,6 +10,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 
+from icecode import observability as obs
 from icecode.agent import Agent
 from icecode.config import load_config
 from icecode.llm.factory import create_provider
@@ -171,25 +172,29 @@ def main(argv: list[str] | None = None) -> None:
 
     console.print("[dim]输入你的需求，输入 exit / quit 退出。[/dim]\n")
 
-    while True:
-        try:
-            # 无颜色 prompt，避免 ANSI 宽度被 readline 算错
-            user_input = input("icecode> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]再见[/dim]")
-            break
+    try:
+        while True:
+            try:
+                # 无颜色 prompt，避免 ANSI 宽度被 readline 算错
+                user_input = input("icecode> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]再见[/dim]")
+                break
 
-        if not user_input:
-            continue
-        if user_input.lower() in ("exit", "quit"):
-            break
+            if not user_input:
+                continue
+            if user_input.lower() in ("exit", "quit"):
+                break
 
-        try:
-            # 流式开启时最终回答已在 Agent 内 Live 渲染；此处不再重复 Panel
-            agent.run_turn(user_input)
-        except Exception as e:
-            console.print(f"[red]发生错误: {type(e).__name__}: {e}[/red]")
-            continue
+            try:
+                # 流式开启时最终回答已在 Agent 内 Live 渲染；此处不再重复 Panel
+                agent.run_turn(user_input)
+            except Exception as e:
+                console.print(f"[red]发生错误: {type(e).__name__}: {e}[/red]")
+                continue
+    finally:
+        # 任何退出路径（含 Ctrl+C 打断 turn）都把缓冲的 trace 发出去
+        obs.flush()
 
 
 if __name__ == "__main__":
