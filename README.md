@@ -50,6 +50,12 @@ icecode -r
 python -m icecode
 ```
 
+非交互（跑一条 prompt、打印最终回答后退出；需确认的操作一律拒绝，不写会话文件）：
+
+```bash
+icecode -p "用一两句话解释什么是 Python 的装饰器"
+```
+
 纯对话（关闭工具）：
 
 ```bash
@@ -62,7 +68,9 @@ ICECODE_ENABLE_TOOLS=false icecode
 
 ```
 icecode/
-  cli.py           # REPL 入口（含 -c / -r）
+  cli.py           # REPL 入口（含 -c / -r / -p）
+  headless.py      # 非交互运行：一条 prompt → 最终回答
+  experiment.py    # 数据集实验：逐条 Item 跑 Agent，记为一次 run
   agent.py         # Agent Loop
   config.py        # 环境配置
   session.py       # 会话 transcript
